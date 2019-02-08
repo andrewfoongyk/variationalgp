@@ -1,0 +1,13 @@
+Note on the dataset:
+
+This is the Boston Housing dataset, it consists of 506 examples. These have been split into 455 training examples and 51 test examples.
+I can't find the particular split used in Titsias (2009) so this is the first split from Yarin Gal's Dropout uncertainty experiments repo.
+Therefore I expect the performance to be slightly different from the paper. The data can be loaded as a pickle file as the following:
+
+train_set, train_set_normalised, val_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
+
+train_set is the unnormalised examples. and it is (409 x 14) - the last column is the regression target
+train_set_normalised is train_set, but normalised to have zero mean and unit standard deviation
+val_set_normalised is the normalised validation set - (46 x 14) - if not doing cross validation, concatenate this with the train_set_normalised
+test_set is the unnormalised test set. In order to use this, need to normalise by subtraction train_mean and dividing by train_sd
+train_mean and train_sd are the mean and standard deviations of the training set, which we used to normalise them
