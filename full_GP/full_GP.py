@@ -11,19 +11,21 @@ import matplotlib.pyplot as plt
 """this implementation follows Algorithm 2.1 in Rasmussen and Williams"""
 
 class GP(nn.Module):
-    def __init__(self):
+    def __init__(self, no_inputs):
         super(GP, self).__init__()
         # initialise hyperparameters
+        self.no_inputs = no_inputs # input dimension
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
-        self.logl2 = nn.Parameter(torch.Tensor([0])) # horizontal length scale
+        self.logl2 = nn.Parameter(torch.zeros(no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
 
     def get_LL(self, train_inputs, train_outputs):
-        # form the kernel matrix Knn
-        train_inputs_col = torch.unsqueeze(train_inputs, 1)
-        train_inputs_row = torch.unsqueeze(train_inputs, 0)
-        squared_distances = (train_inputs_col - train_inputs_row)**2
-        Knn = torch.exp(self.logsigmaf2) * torch.exp(-(1/(2*torch.exp(self.logl2))) * squared_distances)
+        # form the kernel matrix Knn using squared exponential ARD kernel
+        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
+        train_inputs_row = torch.unsqueeze(train_inputs.transpose(0,1), 1)
+        squared_distances = (train_inputs_col - train_inputs_row)**2        
+        length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
+        Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
         
         # cholesky decompose
         L = torch.potrf(Knn + torch.exp(self.logsigman2) + torch.exp(self.logsigman2)*torch.eye(no_train), upper=False) # lower triangular decomposition
@@ -35,11 +37,12 @@ class GP(nn.Module):
         return LL
     
     def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
-        # form the kernel matrix Knn
-        train_inputs_col = torch.unsqueeze(train_inputs, 1)
-        train_inputs_row = torch.unsqueeze(train_inputs, 0)
-        squared_distances = (train_inputs_col - train_inputs_row)**2
-        Knn = torch.exp(self.logsigmaf2) * torch.exp(-(1/(2*torch.exp(self.logl2))) * squared_distances)
+        # form the kernel matrix Knn using squared exponential ARD kernel
+        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
+        train_inputs_row = torch.unsqueeze(train_inputs.transpose(0,1), 1)
+        squared_distances = (train_inputs_col - train_inputs_row)**2        
+        length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
+        Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
         
         pred_mean = torch.zeros(no_test)
         pred_var = torch.zeros(no_test)
@@ -52,8 +55,10 @@ class GP(nn.Module):
         # get mean and predictive variance for each test point
         for i in range(no_test):
             # form the test point kernel vector
-            squared_distances = (test_inputs[i] - train_inputs_col)**2
-            kstar = torch.exp(self.logsigmaf2) * torch.exp(-(1/(2*torch.exp(self.logl2))) * squared_distances)
+            
+            squared_distances = ((test_inputs[i]).reshape(self.no_inputs,1,1) - train_inputs_col)**2        
+            length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
+            kstar = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
             
             # get predictive mean
             pred_mean[i] = torch.squeeze(kstar.transpose(0,1) @ alpha)
@@ -61,7 +66,6 @@ class GP(nn.Module):
             # get predictive variance
             v = torch.squeeze(torch.trtrs(kstar, L, upper=False)[0])
             pred_var[i] = torch.exp(self.logsigmaf2) - torch.dot(v,v) + torch.exp(self.logsigman2)
-
         return pred_mean, pred_var
 
 
@@ -69,6 +73,7 @@ if __name__ == "__main__":
 
     learning_rate = 1 # 1 for BFGS, 0.001 for Adam
     no_iters = 200
+    no_inputs = 1 # dimensionality of input
     BFGS = True # use Adam or BFGS 
 
     # load the 1D dataset
@@ -80,11 +85,13 @@ if __name__ == "__main__":
 
     # convert to torch tensors
     train_inputs = torch.Tensor(train_inputs)
+    train_inputs = torch.unsqueeze(train_inputs, 1) # 1 dimensional data 
     train_outputs = torch.Tensor(train_outputs)
     test_inputs = torch.Tensor(test_inputs)
+    test_inputs = torch.unsqueeze(test_inputs, 1) # 1 dimensional data
 
     # initialise model
-    model = GP()
+    model = GP(no_inputs)
 
     # optimize hyperparameters
     if BFGS == True:
@@ -116,12 +123,12 @@ if __name__ == "__main__":
 
     # plot 1D regression
     fig, ax = plt.subplots()
-    plt.plot(train_inputs.data.numpy(), train_outputs.data.numpy(), '+k')
+    plt.plot(torch.squeeze(train_inputs).data.numpy(), train_outputs.data.numpy(), '+k')
     pred_mean = pred_mean.data.numpy()
     pred_var = pred_var.data.numpy()
     pred_sd = np.sqrt(pred_var)
-    plt.plot(test_inputs.data.numpy(), pred_mean, color='b')
-    plt.fill_between(test_inputs.data.numpy(), pred_mean + 2*pred_sd, 
+    plt.plot(torch.squeeze(test_inputs).data.numpy(), pred_mean, color='b')
+    plt.fill_between(torch.squeeze(test_inputs).data.numpy(), pred_mean + 2*pred_sd, 
             pred_mean - 2*pred_sd, color='b', alpha=0.3)
     filepath = 'full_GP_200.pdf'
     fig.savefig(filepath)
