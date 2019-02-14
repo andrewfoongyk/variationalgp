@@ -28,12 +28,12 @@ class GP(nn.Module):
         Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
         
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2) + torch.exp(self.logsigman2)*torch.eye(no_train), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         alpha = torch.trtrs(Lslashy, torch.transpose(L,0,1))[0]
 
         # get log marginal likelihood
-        LL = -0.5*torch.dot(train_outputs, torch.squeeze(alpha)) - torch.sum(torch.log(torch.diag(L))) - (no_train/2)*torch.log(torch.Tensor([2*3.1415926536]))
+        LL = -0.5*torch.dot(train_outputs, torch.squeeze(alpha)) - torch.sum(torch.log(torch.diag(L))) - (train_inputs.shape[0]/2)*torch.log(torch.Tensor([2*3.1415926536]))
         return LL
     
     def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
@@ -44,11 +44,12 @@ class GP(nn.Module):
         length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
         Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
         
+        no_test = test_inputs.shape[0]
         pred_mean = torch.zeros(no_test)
         pred_var = torch.zeros(no_test)
 
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(no_train), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         alpha = torch.trtrs(Lslashy, torch.transpose(L,0,1))[0]
 
@@ -135,9 +136,10 @@ if __name__ == "__main__":
     plt.close()
 
     # print final NLL and hyperparameters
-    file = open('final_hypers.txt','w') 
-    file.write('noise_sd: {} \n'.format(torch.exp(model.logsigman2/2)))
-    file.write('function_sd: {} \n'.format(torch.exp(model.logsigmaf2/2)))
-    file.write('length_scale: {} \n'.format(torch.exp(model.logl2/2)))
-    file.write('log_marginal_likelihood: {} \n'.format(model.get_LL(train_inputs, train_outputs)))
+    file = open('results_200.txt','w') 
+    file.write('1D GP regression with 20 points \n')
+    file.write('noise_sd: {} \n'.format(torch.exp(model.logsigman2/2).item()))
+    file.write('function_sd: {} \n'.format(torch.exp(model.logsigmaf2/2).item()))
+    file.write('length_scale: {} \n'.format(torch.exp(model.logl2/2).item()))
+    file.write('log_marginal_likelihood: {} \n'.format(model.get_LL(train_inputs, train_outputs).item()))
     file.close() 
