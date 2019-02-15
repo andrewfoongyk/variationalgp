@@ -11,6 +11,10 @@ import pickle
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
+    # set random seed for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     # unpickle the boston housing dataset
     data_location = '..//data//boston_housing//boston_housing0.pkl'
     with open(data_location, 'rb') as f:

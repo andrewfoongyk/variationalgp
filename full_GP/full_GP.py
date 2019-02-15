@@ -35,14 +35,20 @@ class GP(nn.Module):
         # get log marginal likelihood
         LL = -0.5*torch.dot(train_outputs, torch.squeeze(alpha)) - torch.sum(torch.log(torch.diag(L))) - (train_inputs.shape[0]/2)*torch.log(torch.Tensor([2*3.1415926536]))
         return LL
-    
-    def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
-        # form the kernel matrix Knn using squared exponential ARD kernel
-        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
-        train_inputs_row = torch.unsqueeze(train_inputs.transpose(0,1), 1)
-        squared_distances = (train_inputs_col - train_inputs_row)**2        
+
+    def get_K(self, input1, input2):
+        # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel
+        inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
+        inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
+        squared_distances = (inputs_col - inputs_row)**2        
         length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
-        Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        return K
+
+    def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
+        # get covariance matrix
+        Knn = self.get_K(train_inputs, train_inputs)
+        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
         
         no_test = test_inputs.shape[0]
         pred_mean = torch.zeros(no_test)
@@ -69,8 +75,37 @@ class GP(nn.Module):
             pred_var[i] = torch.exp(self.logsigmaf2) - torch.dot(v,v) + torch.exp(self.logsigman2)
         return pred_mean, pred_var
 
+    def joint_posterior_predictive(self, train_inputs, train_outputs, test_inputs, noise=True):
+        # return the joint posterior, which is a multivariate Gaussian
+        no_test = test_inputs.shape[0]
+        # get training inputs covariance matrix
+        Knn = self.get_K(train_inputs, train_inputs)
+        
+        # cholesky decompose
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
+        Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
+        
+        # get cross covariance between test and train points, Ktn
+        Ktn = self.get_K(test_inputs, train_inputs)
+        Knt = Ktn.transpose(0,1)
+
+        # get predictive mean 
+        LslashKnt = torch.trtrs(Knt, L, upper=False)[0]
+        pred_mean = LslashKnt.transpose(0,1) @ Lslashy
+ 
+        # get predictive covariance
+        Ktt = self.get_K(test_inputs, test_inputs)
+        if noise == True: # add observation noise
+            pred_cov = Ktt + torch.exp(self.logsigman2)*torch.eye(no_test) - LslashKnt.transpose(0,1) @ LslashKnt
+        else:
+            pred_cov = Ktt - LslashKnt.transpose(0,1) @ LslashKnt + 1e-6*torch.eye(no_test)
+
+        return pred_mean, pred_cov
 
 if __name__ == "__main__":
+    # set random seed for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
 
     learning_rate = 1 # 1 for BFGS, 0.001 for Adam
     no_iters = 200
@@ -132,6 +167,24 @@ if __name__ == "__main__":
     plt.fill_between(torch.squeeze(test_inputs).data.numpy(), pred_mean + 2*pred_sd, 
             pred_mean - 2*pred_sd, color='b', alpha=0.3)
     filepath = 'full_GP_200.pdf'
+    fig.savefig(filepath)
+    plt.close()
+
+    # plot samples from the posterior using the full predictive distribution
+    pred_mean, pred_cov = model.joint_posterior_predictive(train_inputs, train_outputs, test_inputs, noise=False)
+    pred_mean = torch.squeeze(pred_mean)
+    pred_mean = pred_mean.data.numpy()
+    pred_cov = pred_cov.data.numpy()
+    import pdb; pdb.set_trace()
+    no_samples = 10
+    # sample from the posterior predictive
+    samples = np.random.multivariate_normal(pred_mean, pred_cov, no_samples)
+    # plot the samples
+    fig, ax = plt.subplots()
+    plt.plot(torch.squeeze(train_inputs).data.numpy(), train_outputs.data.numpy(), '+k')
+    for i in range(no_samples):
+        plt.plot(torch.squeeze(test_inputs).data.numpy(), samples[i,:])
+    filepath = 'full_GP_200_samples.pdf'
     fig.savefig(filepath)
     plt.close()
 
