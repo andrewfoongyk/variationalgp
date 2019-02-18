@@ -1,4 +1,0 @@
-noise_sd: tensor([0.2820], grad_fn=<ExpBackward>) 
-function_sd: tensor([0.8754], grad_fn=<ExpBackward>) 
-length_scale: tensor([0.6112], grad_fn=<ExpBackward>) 
-log_marginal_likelihood: tensor([-55.9970], grad_fn=<ThSubBackward>) 
