@@ -6,25 +6,31 @@ import pickle
 import sys
 import matplotlib.pyplot as plt
 import random
+from tqdm import tqdm
+from tqdm import trange
+from copy import deepcopy
 
 class variational_GP(nn.Module):  
-    def __init__(self, Xn, Yn):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions
-        
-        super().__init__()
+    def __init__(self, Xn, Yn, no_inducing=15):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
+        super(variational_GP, self).__init__()
+        # initialise inducing points randomly
+        upper = 3
+        lower = 2
+        input_locations = (lower - upper) * torch.rand(no_inducing) + upper
+        self.Xm = nn.Parameter(torch.unsqueeze(input_locations, 1).type(torch.FloatTensor))
+        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),15),:]).type(torch.FloatTensor))
+
         # initialise hyperparameters
-        self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),15),:]).type(torch.FloatTensor))
         self.Xn = torch.tensor(Xn).type(torch.FloatTensor)
         self.Yn = torch.tensor(Yn).type(torch.FloatTensor)
         self.no_inputs = Xn.shape[1]
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
         self.logl2 = nn.Parameter(torch.zeros(self.no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
-        self.jitter_factor = 1e-4
-        self.log_marg = 0
-        self.reg = 0
+        self.jitter_factor = 1e-5
         
-    def get_K(self,inputs1,inputs2):
-        
+    def get_K(self,inputs1,inputs2):  
+        # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel   
         inputs1_col = torch.unsqueeze(inputs1.transpose(0,1), 2)
         inputs2_row = torch.unsqueeze(inputs2.transpose(0,1), 1)
         squared_distances = (inputs1_col - inputs2_row)**2        
@@ -34,118 +40,102 @@ class variational_GP(nn.Module):
     
     def Fv(self): # All the necessary arguments are instance variables, so no need to pass them
         no_train = self.Xn.shape[0]
-        # Compute first term (log marginal likelihood)
-        
-        M = self.get_K(self.Xm,self.Xm) + 1/torch.exp(self.logsigman2) * torch.mm(self.get_K(self.Xm,self.Xn),self.get_K(self.Xn,self.Xm))
-        M = M + torch.eye(M.shape[0])*self.jitter_factor
-        L = torch.potrf(M,upper=False)
-        LslashKmnYn, _ = torch.trtrs(torch.mm(self.get_K(self.Xm,self.Xn),self.Yn),L,upper=False)
+        no_inducing = self.Xm.shape[0]
 
-        Kmm = self.get_K(self.Xm,self.Xm)
-        
-        term_pi = - self.Xn.shape[1] / 2 * torch.log(torch.Tensor([2*np.pi]))
+        # Calculate kernel matrices 
+        Kmm = self.get_K(self.Xm, self.Xm)
+        Knm = self.get_K(self.Xn, self.Xm)
+        Kmn = Knm.transpose(0,1)
 
-        logdetM = 2*torch.sum(torch.log(torch.diag(L)))
-        Lmm = torch.potrf(Kmm + 1e-6*torch.eye(Kmm.shape[0]), upper=False)
-        logdetKmm = 2*torch.sum(torch.log(torch.diag(Lmm)))
+        # calculate the 'inner matrix' and Cholesky decompose
+        M = Kmm + torch.exp(-self.logsigman2) * Kmn @ Knm
+        L = torch.potrf(M + M[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
 
-        term_det = - 1 / 2 * (logdetM - logdetKmm +  no_train*self.logsigman2)
-        term_quadratics =  - 1/2*(1/torch.exp(self.logsigman2)*torch.mm(self.Yn.transpose(0,1),self.Yn) 
-                                   - 1/torch.exp(self.logsigman2)**2 * torch.mm(LslashKmnYn.transpose(0,1),LslashKmnYn))
-        log_marg = term_pi + term_det + term_quadratics               
+        # Compute first term (log of Gaussian pdf)
+        # constant term
+        constant_term = -(no_train/2) * torch.log(torch.Tensor([2*np.pi]))
         
-        # Compute second term (trace, regularizer)
-        TrKnn = 0
-        for elem in self.Xn:
-            TrKnn += self.get_K(elem.unsqueeze(0),elem.unsqueeze(0))
-        
-        Kmm = self.get_K(self.Xm,self.Xm)
-        Kmm = Kmm + torch.eye(Kmm.shape[0])*self.jitter_factor
-        L = torch.potrf(Kmm,upper=False)
-        LslashKmn, _ = torch.trtrs(self.get_K(self.Xm,self.Xn),L,upper=False)
-        TrKKK = torch.sum(LslashKmn * LslashKmn)       
-        reg = - 1/torch.exp(self.logsigman2) * TrKnn - TrKKK
-        
-        self.log_marg = log_marg
-        self.reg = reg
-        return(log_marg + reg)
+        # quadratic term - Yn should be a column vector
+        LslashKmny = torch.trtrs(Kmn @ self.Yn, L, upper=False)[0]
+        quadratic_term = -0.5 * (torch.exp(-self.logsigman2) * self.Yn.transpose(0,1) @ self.Yn - torch.exp(-2*self.logsigman2) * LslashKmny.transpose(0,1) @ LslashKmny )
+
+        # logdet term
+        # Cholesky decompose the Kmm
+        L_inducing = torch.potrf(Kmm + Kmm[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+        logdet_term = -0.5 * ( 2*torch.sum(torch.log(torch.diag(L))) - 2*torch.sum(torch.log(torch.diag(L_inducing))) + no_train * self.logsigman2 )
+
+        log_gaussian_term = constant_term + logdet_term + quadratic_term
+
+        # Compute the second term (trace regulariser)
+        B = torch.trtrs(Kmn , L_inducing, upper=False)[0]
+        trace_term = -0.5 * torch.exp(-self.logsigman2) * ( no_train*torch.exp(self.logsigmaf2) - torch.sum(B**2) )
+
+        return log_gaussian_term + trace_term
+
+    def joint_posterior_predictive(self, test_inputs, noise=False): # assume test_inputs is a numpy array
+        # get the mean and covariance of the joint Gaussian posterior over the test outputs
+        test_inputs = torch.Tensor(test_inputs).type(torch.FloatTensor) 
+        no_test = test_inputs.shape[0]
+        no_inducing = self.Xm.shape[0]   
+       
+        # Calculate kernel matrices 
+        Kxx = self.get_K(test_inputs, test_inputs)
+        Kmx = self.get_K(self.Xm, test_inputs)
+        Kmm = self.get_K(self.Xm, self.Xm)
+        Knm = self.get_K(self.Xn, self.Xm)
+        Kmn = Knm.transpose(0,1)
+
+        # calculate the 'inner matrix' and Cholesky decompose
+        M = Kmm + torch.exp(-self.logsigman2) * Kmn @ Knm
+        L = torch.potrf(M + M[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+
+        # Cholesky decompose the Kmm
+        L_inducing = torch.potrf(Kmm + Kmm[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+
+        # backsolve 
+        LindslashKmx = torch.trtrs(Kmx, L_inducing, upper=False)[0]
+        LslashKmx = torch.trtrs(Kmx, L, upper=False)[0]
+
+        cov = Kxx - LindslashKmx.transpose(0,1) @ LindslashKmx + LslashKmx.transpose(0,1) @ LslashKmx
+
+        if noise == True: # add observation noise
+            cov = cov + torch.exp(self.logsigman2) * torch.eye(no_test)
+
+        # calculate the predictive mean by backsolving
+        LslashKmny = torch.trtrs(Kmn @ self.Yn, L, upper=False)[0]
+
+        mean = torch.exp(-self.logsigman2) * LslashKmx.transpose(0,1) @ LslashKmny
+
+        return mean, cov            
     
-    def posterior_predictive(self,test_inputs):
-        
-        test_inputs = torch.Tensor(test_inputs)
-        Sigma = self.get_K(self.Xm,self.Xm) + 1/torch.exp(self.logsigman2) * torch.mm(self.get_K(self.Xn,self.Xm).transpose(0,1),
-                                                              self.get_K(self.Xn,self.Xm))
-        Sigma = Sigma+torch.eye(Sigma.shape[0])*self.jitter_factor
+    def optimize_parameters(self, no_iters, method = 'BFGS', learning_rate=1):
 
-        #Mean
-        L = torch.potrf(Sigma,upper=False)
-        LslashKmnYn, _ = torch.trtrs(torch.mm(self.get_K(self.Xn,self.Xm).transpose(0,1),self.Yn),L,upper=False)
-        aT, _ = torch.trtrs(self.get_K(test_inputs,self.Xm).transpose(0,1),L,upper=False)
-        KxmLslash = aT.transpose(0,1)
-        myq = 1/torch.exp(self.logsigman2) * torch.mm(KxmLslash,LslashKmnYn)
-
-        #Second term of the covariance
-
-        Kmm = self.get_K(self.Xm,self.Xm)
-        Kmm = Kmm + torch.eye(Kmm.shape[0])*self.jitter_factor
-        L = torch.potrf(Kmm,upper=False)
-        aT, _ = torch.trtrs(self.get_K(test_inputs,self.Xm).transpose(0,1),L,upper=False)
-        KxmLTslash = aT.transpose(0,1)
-        LslashKmx, _ = torch.trtrs(self.get_K(test_inputs,self.Xm).transpose(0,1),L,upper=False)
-        KxmKmminvKmx = torch.mm(KxmLTslash,LslashKmx)
-
-        #Third term of the variance
-
-        L = torch.potrf(Sigma,upper=False)
-        aT, _ = torch.trtrs(self.get_K(test_inputs,self.Xm).transpose(0,1),L,upper=False)
-        KxmLTslash = aT.transpose(0,1)
-        LslashKmx, _ = torch.trtrs(self.get_K(test_inputs,self.Xm).transpose(0,1),L,upper=False)
-        KxmSigmainvKmx = torch.mm(KxmLTslash,LslashKmx)
-
-        #Whole covariance
-        kyq = self.get_K(test_inputs,test_inputs) - KxmKmminvKmx + KxmSigmainvKmx + torch.exp(self.logsigman2)*torch.eye(test_inputs.shape[0])
-        
-        return(myq,kyq)
-        
-    
-    def optimize_parameters(self,no_iters,method):
-        
-        # Set criterion and optimizer FOR NOW I'M GONNA USE ADAM ONLY
-        '''if method == 'BFGS':
-            optimizer = optim.LBFGS(self.parameters(), lr=1)  
+        # optimize hyperparameters and inducing points
+        if method == 'BFGS':
+            optimizer = optim.LBFGS(self.parameters(), lr=learning_rate)
         elif method == 'Adam':
-            optimizer = optim.Adam(self.parameters(), lr=0.001)
-        else: 
-            sys.exit('method must be either \'BFGS\' or \'Adam\'') # An exception would be better
-        
-        for iteration in range(no_iters):
-            optimizer.zero_grad()
-            loss = self.Fv() # Forward
-            loss.backward() # Backward
-            optimizer.step() # Optimize'''
-            
-        optimizer = optim.Adam(self.parameters(), lr=0.1)
-        for iteration in range(no_iters):
-            print(iteration)
-            optimizer.zero_grad()
-            loss = - self.Fv() # Forward. WHY DON'T I HAVE TO NEGATE THIS?
-            loss.backward() # Backward
-            optimizer.step() # Optimize
-            
-            if iteration%50 == 0:
-                print(iteration,self.Fv())
+            optimizer = optim.Adam(self.parameters(), lr=learning_rate)
+        else:
+            raise Exception('{} is not a valid method'.format)
 
-def plot_GP(pred_mean,pred_covar,train_inputs,train_outputs,test_inputs):
-    fig, ax = plt.subplots()
-    plt.plot(train_inputs, train_outputs, '+k')
-    pred_mean = pred_mean.data.numpy()
-    pred_sd = np.sqrt(pred_covar.data.numpy().diagonal())
-    plt.plot(test_inputs, pred_mean, '+b')
-    plt.plot(test_inputs, np.squeeze(pred_mean) + 2*pred_sd, '+r')
-    plt.plot(test_inputs, np.squeeze(pred_mean) - 2*pred_sd, '+r')
-    plt.fill_between(np.squeeze(test_inputs), np.squeeze(pred_mean) + 2*pred_sd, 
-                    np.squeeze(pred_mean) - 2*pred_sd, color='b', alpha=0.3)
-    plt.show()
+        with trange(no_iters) as t:
+            for i in t:
+                if method == 'BFGS':
+                    def closure():
+                        optimizer.zero_grad()
+                        negFv = -self.Fv()
+                        negFv.backward()
+                        return negFv
+                    optimizer.step(closure)
+                    negFv = -self.Fv()
+                elif method == 'Adam': 
+                    optimizer.zero_grad()
+                    negFv = -self.Fv()
+                    negFv.backward()
+                    optimizer.step() 
+                # update tqdm 
+                if i % 10 == 0:
+                    t.set_postfix(loss=negFv.item())
 
 if __name__ == "__main__": 
     # set random seed for reproducibility
@@ -165,8 +155,12 @@ if __name__ == "__main__":
     test_inputs = torch.Tensor(test_inputs)
     test_inputs = torch.unsqueeze(test_inputs, 1) # 1 dimensional data
 
-    myGP = variational_GP(train_inputs.data.numpy(), np.expand_dims(train_outputs.data.numpy(),1))
-    pred_mean, pred_covar = myGP.posterior_predictive(test_inputs.data.numpy())
+    no_inducing = 15
+    myGP = variational_GP(train_inputs.data.numpy(), np.expand_dims(train_outputs.data.numpy(),1), no_inducing=no_inducing)
+    pred_mean, pred_covar = myGP.joint_posterior_predictive(test_inputs.data.numpy())
+
+    # record initial inducing point locations
+    initial_inducing = deepcopy(torch.squeeze(myGP.Xm).data.numpy())
 
     # plot and save
     fig, ax = plt.subplots()
@@ -181,11 +175,18 @@ if __name__ == "__main__":
     fig.savefig(filepath)
     plt.close()
 
-    myGP.optimize_parameters(500,'Adam')
-    pred_mean, pred_covar = myGP.posterior_predictive(test_inputs.data.numpy())
+    myGP.optimize_parameters(500, 'Adam', learning_rate=0.1)
+    pred_mean, pred_covar = myGP.joint_posterior_predictive(test_inputs.data.numpy(), noise=True) # plot error bars with observation noise
+
+    # final inducing points
+    final_inducing = torch.squeeze(myGP.Xm).data.numpy()
 
     # plot after
     fig, ax = plt.subplots()
+    # plot inducing point locations
+    plt.scatter(initial_inducing, 2*np.ones(no_inducing), s=50, marker = '+')
+    plt.scatter(final_inducing, -3*np.ones(no_inducing), s=50, marker = '+')
+
     plt.plot(torch.squeeze(train_inputs).data.numpy(), train_outputs.data.numpy(), '+k')
     pred_mean = (torch.squeeze(pred_mean)).data.numpy()
     pred_var = (torch.diag(pred_covar)).data.numpy()
