@@ -13,12 +13,6 @@ from copy import deepcopy
 class variational_GP(nn.Module):  
     def __init__(self, Xn, Yn, no_inducing=15):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
         super(variational_GP, self).__init__()
-        # initialise inducing points randomly
-        upper = 3
-        lower = 2
-        input_locations = (lower - upper) * torch.rand(no_inducing) + upper
-        self.Xm = nn.Parameter(torch.unsqueeze(input_locations, 1).type(torch.FloatTensor))
-        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),15),:]).type(torch.FloatTensor))
 
         # initialise hyperparameters
         self.Xn = torch.tensor(Xn).type(torch.FloatTensor)
@@ -27,7 +21,15 @@ class variational_GP(nn.Module):
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
         self.logl2 = nn.Parameter(torch.zeros(self.no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
-        self.jitter_factor = 1e-5
+        self.jitter_factor = 1e-6
+
+        # initialise inducing points randomly
+        #import pdb; pdb.set_trace()
+        upper = 3
+        lower = 2
+        input_locations = (lower - upper) * torch.rand(no_inducing,self.Xn.shape[1]) + upper
+        self.Xm = nn.Parameter(input_locations.type(torch.FloatTensor),requires_grad=True)
+        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
         
     def get_K(self,inputs1,inputs2):  
         # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel   
@@ -35,12 +37,16 @@ class variational_GP(nn.Module):
         inputs2_row = torch.unsqueeze(inputs2.transpose(0,1), 1)
         squared_distances = (inputs1_col - inputs2_row)**2        
         length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
+
+        #import pdb; pdb.set_trace()
         K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
         return(K)
     
     def Fv(self): # All the necessary arguments are instance variables, so no need to pass them
         no_train = self.Xn.shape[0]
         no_inducing = self.Xm.shape[0]
+
+        #import pdb; pdb.set_trace()
 
         # Calculate kernel matrices 
         Kmm = self.get_K(self.Xm, self.Xm)
@@ -49,7 +55,7 @@ class variational_GP(nn.Module):
 
         # calculate the 'inner matrix' and Cholesky decompose
         M = Kmm + torch.exp(-self.logsigman2) * Kmn @ Knm
-        L = torch.potrf(M + M[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+        L = torch.potrf(M + torch.mean(torch.diag(M))*self.jitter_factor*torch.eye(no_inducing), upper=False)
 
         # Compute first term (log of Gaussian pdf)
         # constant term
@@ -61,7 +67,7 @@ class variational_GP(nn.Module):
 
         # logdet term
         # Cholesky decompose the Kmm
-        L_inducing = torch.potrf(Kmm + Kmm[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+        L_inducing = torch.potrf(Kmm + torch.mean(torch.diag(Kmm))*self.jitter_factor*torch.eye(no_inducing), upper=False)
         logdet_term = -0.5 * ( 2*torch.sum(torch.log(torch.diag(L))) - 2*torch.sum(torch.log(torch.diag(L_inducing))) + no_train * self.logsigman2 )
 
         log_gaussian_term = constant_term + logdet_term + quadratic_term
@@ -87,10 +93,10 @@ class variational_GP(nn.Module):
 
         # calculate the 'inner matrix' and Cholesky decompose
         M = Kmm + torch.exp(-self.logsigman2) * Kmn @ Knm
-        L = torch.potrf(M + M[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+        L = torch.potrf(M + torch.mean(torch.diag(M))*self.jitter_factor*torch.eye(no_inducing), upper=False)
 
         # Cholesky decompose the Kmm
-        L_inducing = torch.potrf(Kmm + Kmm[0,0]*self.jitter_factor*torch.eye(no_inducing), upper=False)
+        L_inducing = torch.potrf(Kmm + torch.mean(torch.diag(Kmm))*self.jitter_factor*torch.eye(no_inducing), upper=False)
 
         # backsolve 
         LindslashKmx = torch.trtrs(Kmx, L_inducing, upper=False)[0]
@@ -108,7 +114,7 @@ class variational_GP(nn.Module):
 
         return mean, cov            
     
-    def optimize_parameters(self, no_iters, method = 'BFGS', learning_rate=1):
+    def optimize_parameters(self, no_iters, method = 'Adam', learning_rate=0.1):
 
         # optimize hyperparameters and inducing points
         if method == 'BFGS':
@@ -136,6 +142,7 @@ class variational_GP(nn.Module):
                 # update tqdm 
                 if i % 10 == 0:
                     t.set_postfix(loss=negFv.item())
+                #    print(-negFv)
 
 if __name__ == "__main__": 
     # set random seed for reproducibility
@@ -175,11 +182,14 @@ if __name__ == "__main__":
     fig.savefig(filepath)
     plt.close()
 
-    myGP.optimize_parameters(500, 'Adam', learning_rate=0.1)
+    myGP.optimize_parameters(5000, 'Adam', learning_rate=0.01)
     pred_mean, pred_covar = myGP.joint_posterior_predictive(test_inputs.data.numpy(), noise=True) # plot error bars with observation noise
 
     # final inducing points
     final_inducing = torch.squeeze(myGP.Xm).data.numpy()
+
+    # compute LL
+    print(myGP.Fv())
 
     # plot after
     fig, ax = plt.subplots()
