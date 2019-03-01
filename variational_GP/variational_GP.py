@@ -11,8 +11,9 @@ from tqdm import trange
 from copy import deepcopy
 
 class variational_GP(nn.Module):  
-    def __init__(self, Xn, Yn, no_inducing=15):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
+    def __init__(self, Xn, Yn, no_inducing=15, kernel='SE'):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
         super(variational_GP, self).__init__()
+        self.kernel = kernel
 
         # initialise hyperparameters
         self.Xn = torch.tensor(Xn).type(torch.FloatTensor)
@@ -31,22 +32,28 @@ class variational_GP(nn.Module):
         self.Xm = nn.Parameter(input_locations.type(torch.FloatTensor),requires_grad=True)
         #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
         
-    def get_K(self,inputs1,inputs2):  
-        # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel   
-        inputs1_col = torch.unsqueeze(inputs1.transpose(0,1), 2)
-        inputs2_row = torch.unsqueeze(inputs2.transpose(0,1), 1)
-        squared_distances = (inputs1_col - inputs2_row)**2        
-        length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
-
-        #import pdb; pdb.set_trace()
-        K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
-        return(K)
+    def get_K(self, input1, input2):
+        if self.kernel == 'SE':
+            # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel
+            inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
+            inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
+            squared_distances = (inputs_col - inputs_row)**2        
+            length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
+            K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        elif self.kernel == 'matern':
+            inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
+            inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
+            abs_distances = torch.abs(inputs_col - inputs_row)
+            length_factors = (1/(torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
+            scaled_distances = abs_distances * length_factors
+            K = torch.exp(self.logsigmaf2) * torch.exp(-1.732051*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + 1.732051*scaled_distances), 0))
+        else:
+            raise Exception('Invalid kernel name')
+        return K
     
     def Fv(self): # All the necessary arguments are instance variables, so no need to pass them
         no_train = self.Xn.shape[0]
         no_inducing = self.Xm.shape[0]
-
-        #import pdb; pdb.set_trace()
 
         # Calculate kernel matrices 
         Kmm = self.get_K(self.Xm, self.Xm)
@@ -122,7 +129,7 @@ class variational_GP(nn.Module):
         elif method == 'Adam':
             optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         else:
-            raise Exception('{} is not a valid method'.format)
+            raise Exception('{} is not a valid method'.format(method))
 
         with trange(no_iters) as t:
             for i in t:
@@ -150,7 +157,7 @@ if __name__ == "__main__":
     np.random.seed(0)
 
     # load the 1D dataset
-    with open('../data/1D/1D_200.pkl', 'rb') as f:
+    with open('../data/1D/1D_200_matern.pkl', 'rb') as f:
         train_inputs, train_outputs, test_inputs = pickle.load(f)
     no_train = train_outputs.size
     no_test = test_inputs.shape[0]
@@ -163,7 +170,7 @@ if __name__ == "__main__":
     test_inputs = torch.unsqueeze(test_inputs, 1) # 1 dimensional data
 
     no_inducing = 15
-    myGP = variational_GP(train_inputs.data.numpy(), np.expand_dims(train_outputs.data.numpy(),1), no_inducing=no_inducing)
+    myGP = variational_GP(train_inputs.data.numpy(), np.expand_dims(train_outputs.data.numpy(),1), no_inducing=no_inducing, kernel='matern')
     pred_mean, pred_covar = myGP.joint_posterior_predictive(test_inputs.data.numpy())
 
     # record initial inducing point locations
@@ -178,7 +185,7 @@ if __name__ == "__main__":
     plt.plot(torch.squeeze(test_inputs).data.numpy(), pred_mean, color='b')
     plt.fill_between(torch.squeeze(test_inputs).data.numpy(), pred_mean + 2*pred_sd, 
             pred_mean - 2*pred_sd, color='b', alpha=0.3)
-    filepath = 'var_GP_200.pdf'
+    filepath = 'var_GP_200_matern.pdf'
     fig.savefig(filepath)
     plt.close()
 
@@ -204,6 +211,6 @@ if __name__ == "__main__":
     plt.plot(torch.squeeze(test_inputs).data.numpy(), pred_mean, color='b')
     plt.fill_between(torch.squeeze(test_inputs).data.numpy(), pred_mean + 2*pred_sd, 
             pred_mean - 2*pred_sd, color='b', alpha=0.3)
-    filepath = 'var_GP_200_after.pdf'
+    filepath = 'var_GP_200_after_matern.pdf'
     fig.savefig(filepath)
     plt.close()
