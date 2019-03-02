@@ -42,7 +42,7 @@ if __name__ == "__main__":
 	# record initial inducing point locations
 	initial_inducing = deepcopy(torch.squeeze(varGP.Xm).data.numpy())
 
-	varGP.optimize_parameters(5000, 'Adam', learning_rate=0.001)
+	varGP.optimize_parameters(10000, 'Adam', learning_rate=0.02)
 	var_pred_mean, var_pred_covar = varGP.joint_posterior_predictive(test_inputs.data.numpy(), noise=True) # plot error bars with observation noise
 
 	# final inducing points
@@ -61,8 +61,8 @@ if __name__ == "__main__":
 	torch.manual_seed(0)
 	np.random.seed(0)
 
-	learning_rate = 0.001 # 1 for BFGS, 0.001 for Adam
-	no_iters = 5000
+	learning_rate = 0.02 # 1 for BFGS, 0.001 for Adam
+	no_iters = 10000
 	no_inputs = 1 # dimensionality of input
 	BFGS = False # use Adam or BFGS 
 
@@ -95,16 +95,11 @@ if __name__ == "__main__":
 				t.set_postfix(loss=NLL.item())
 
 
-	# get posterior predictive
-	full_pred_mean, full_pred_var = fullGP.posterior_predictive(train_inputs, train_outputs, test_inputs)	
-
-
 	# plot samples from the posterior using the full predictive distribution
 	full_pred_mean, full_pred_covar = fullGP.joint_posterior_predictive(train_inputs, train_outputs, test_inputs, noise=True)
 	full_pred_mean = torch.squeeze(full_pred_mean)
 	full_pred_mean = full_pred_mean.data.numpy()
-	full_pred_covar = full_pred_covar.data.numpy()
-	full_pred_var = full_pred_var.data.numpy()
+	full_pred_var = (torch.diag(full_pred_covar)).data.numpy()
 	full_pred_sd = np.sqrt(full_pred_var)
 
 	#import pdb; pdb.set_trace()
