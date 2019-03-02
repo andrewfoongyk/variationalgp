@@ -11,8 +11,10 @@ import matplotlib.pyplot as plt
 """this implementation follows Algorithm 2.1 in Rasmussen and Williams"""
 
 class GP(nn.Module):
-    def __init__(self, no_inputs):
+    def __init__(self, no_inputs, kernel='SE'):
         super(GP, self).__init__()
+        self.kernel = kernel
+
         # initialise hyperparameters
         self.no_inputs = no_inputs # input dimension
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
@@ -38,12 +40,22 @@ class GP(nn.Module):
         return LL
 
     def get_K(self, input1, input2):
-        # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel
-        inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
-        inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
-        squared_distances = (inputs_col - inputs_row)**2        
-        length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
-        K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        if self.kernel == 'SE':
+            # form the kernel matrix with dimensions (input1 x input2) using squared exponential ARD kernel
+            inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
+            inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
+            squared_distances = (inputs_col - inputs_row)**2        
+            length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
+            K = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        elif self.kernel == 'matern':
+            inputs_col = torch.unsqueeze(input1.transpose(0,1), 2)
+            inputs_row = torch.unsqueeze(input2.transpose(0,1), 1)
+            abs_distances = torch.abs(inputs_col - inputs_row)
+            length_factors = (1/(torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
+            scaled_distances = abs_distances * length_factors
+            K = torch.exp(self.logsigmaf2) * torch.exp(-np.sqrt(3)*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + np.sqrt(3)*scaled_distances), 0))
+        else:
+            raise Exception('Invalid kernel name')
         return K
 
     def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
