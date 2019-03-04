@@ -1,0 +1,11 @@
+variational GP results: 
+noise_sd: 0.20766234397888184 
+function_sd: 0.9445284008979797 
+length_scale: 1.1546144485473633 
+variational free energy Fv: -4.260487079620361 
+ 
+full GP results: 
+noise_sd: 0.19362872838974 
+function_sd: 1.1400765180587769 
+length_scale: 1.0738158226013184 
+log_marginal_likelihood: 4.537506103515625 

@@ -1,0 +1,5 @@
+1D GP regression with 20 points 
+noise_sd: 0.28223609924316406 
+function_sd: 0.8995621800422668 
+length_scale: 1.0095770359039307 
+log_marginal_likelihood: -60.573944091796875 

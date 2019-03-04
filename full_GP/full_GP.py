@@ -47,7 +47,7 @@ class GP(nn.Module):
             abs_distances = torch.abs(inputs_col - inputs_row)
             length_factors = (1/(torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
             scaled_distances = abs_distances * length_factors
-            K = torch.exp(self.logsigmaf2) * torch.exp(-1.732051*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + 1.732051*scaled_distances), 0))
+            K = torch.exp(self.logsigmaf2) * torch.exp(-torch.Tensor([np.sqrt(3)])*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + torch.Tensor([np.sqrt(3)])*scaled_distances), 0))
         else:
             raise Exception('Invalid kernel name')
         return K
