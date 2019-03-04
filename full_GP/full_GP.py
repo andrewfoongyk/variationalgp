@@ -14,24 +14,18 @@ class GP(nn.Module):
     def __init__(self, no_inputs, kernel='SE'):
         super(GP, self).__init__()
         self.kernel = kernel
-
         # initialise hyperparameters
         self.no_inputs = no_inputs # input dimension
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
         self.logl2 = nn.Parameter(torch.zeros(no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
-        self.jitter_factor = 1e-6
 
     def get_LL(self, train_inputs, train_outputs):
-        # form the kernel matrix Knn using squared exponential ARD kernel
-        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
-        train_inputs_row = torch.unsqueeze(train_inputs.transpose(0,1), 1)
-        squared_distances = (train_inputs_col - train_inputs_row)**2        
-        length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)        
-        Knn = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
+        # form the kernel matrix Knn 
+        Knn = self.get_K(train_inputs, train_inputs)
 
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]) + self.jitter_factor*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         alpha = torch.trtrs(Lslashy, torch.transpose(L,0,1))[0]
 
@@ -53,40 +47,10 @@ class GP(nn.Module):
             abs_distances = torch.abs(inputs_col - inputs_row)
             length_factors = (1/(torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
             scaled_distances = abs_distances * length_factors
-            K = torch.exp(self.logsigmaf2) * torch.exp(-np.sqrt(3)*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + np.sqrt(3)*scaled_distances), 0))
+            K = torch.exp(self.logsigmaf2) * torch.exp(-torch.Tensor([np.sqrt(3)])*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + torch.Tensor([np.sqrt(3)])*scaled_distances), 0))
         else:
             raise Exception('Invalid kernel name')
         return K
-
-    def posterior_predictive(self, train_inputs, train_outputs, test_inputs):
-        # get covariance matrix
-        Knn = self.get_K(train_inputs, train_inputs)
-        train_inputs_col = torch.unsqueeze(train_inputs.transpose(0,1), 2)
-        
-        no_test = test_inputs.shape[0]
-        pred_mean = torch.zeros(no_test)
-        pred_var = torch.zeros(no_test)
-
-        # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]) + self.jitter_factor*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
-        Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
-        alpha = torch.trtrs(Lslashy, torch.transpose(L,0,1))[0]
-
-        # get mean and predictive variance for each test point
-        for i in range(no_test):
-            # form the test point kernel vector
-            
-            squared_distances = ((test_inputs[i]).reshape(self.no_inputs,1,1) - train_inputs_col)**2        
-            length_factors = (1/(2*torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
-            kstar = torch.exp(self.logsigmaf2) * torch.exp(-torch.sum(length_factors * squared_distances, 0))
-            
-            # get predictive mean
-            pred_mean[i] = torch.squeeze(kstar.transpose(0,1) @ alpha)
-
-            # get predictive variance with noise variance added
-            v = torch.squeeze(torch.trtrs(kstar, L, upper=False)[0])
-            pred_var[i] = torch.exp(self.logsigmaf2) - torch.dot(v,v) + torch.exp(self.logsigman2)
-        return pred_mean, pred_var
 
     def joint_posterior_predictive(self, train_inputs, train_outputs, test_inputs, noise=False):
         # return the joint posterior, which is a multivariate Gaussian
@@ -95,7 +59,7 @@ class GP(nn.Module):
         Knn = self.get_K(train_inputs, train_inputs)
         
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]) + self.jitter_factor*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         
         # get cross covariance between test and train points, Ktn
@@ -119,7 +83,7 @@ def gaussian_KL(mu0, mu1, Sigma0, Sigma1):
     # calculate the KL divergence between multivariate Gaussians KL(0||1)
     no_dims = Sigma0.shape[0]
 
-    L1 = torch.potrf(Sigma1 + self.jitter_factor*torch.eye(train_inputs.shape[0]), upper=False)
+    L1 = torch.potrf(Sigma1, upper=False)
     L1slashSigma = torch.trtrs(Sigma0 ,L1 ,upper=False)[0]
     SigmainvSigma = torch.trtrs(L1slashSigma ,L1.transpose(0,1))[0]
     trace_term = torch.trace(SigmainvSigma)
@@ -128,7 +92,7 @@ def gaussian_KL(mu0, mu1, Sigma0, Sigma1):
     v = torch.trtrs(mu_diff, L1, upper=False)[0]
     quadratic_term = v.transpose(0,1) @ v
 
-    L0 = torch.potrf(Sigma0 + self.jitter_factor*torch.eye(train_inputs.shape[0]), upper=False)
+    L0 = torch.potrf(Sigma0, upper=False)
     logdet_term = 2*torch.sum(torch.log(torch.diag(L1))) - 2*torch.sum(torch.log(torch.diag(L0)))
 
     KL = 0.5*(trace_term + quadratic_term - no_dims + logdet_term)
@@ -144,8 +108,10 @@ if __name__ == "__main__":
     no_inputs = 1 # dimensionality of input
     BFGS = True # use Adam or BFGS 
 
+    results_directory = 'experiments//full_200_matern_dataset//'
+
     # load the 1D dataset
-    data_location = '..//data//1D//1D_20.pkl'
+    data_location = '..//data//1D//1D_200_matern.pkl'
     with open(data_location, 'rb') as f:
         train_inputs, train_outputs, test_inputs = pickle.load(f)
     no_train = train_outputs.size
@@ -159,7 +125,7 @@ if __name__ == "__main__":
     test_inputs = torch.unsqueeze(test_inputs, 1) # 1 dimensional data
 
     # initialise model
-    model = GP(no_inputs)
+    model = GP(no_inputs, kernel='matern')
 
     # optimize hyperparameters
     if BFGS == True:
@@ -187,7 +153,9 @@ if __name__ == "__main__":
                 t.set_postfix(loss=NLL.item())
 
     # get posterior predictive
-    pred_mean, pred_var = model.posterior_predictive(train_inputs, train_outputs, test_inputs)    
+    pred_mean, pred_covar = model.joint_posterior_predictive(train_inputs, train_outputs, test_inputs, noise=True)  
+    pred_mean = torch.squeeze(pred_mean)
+    pred_var = torch.diag(pred_covar)  
 
     # plot 1D regression
     fig, ax = plt.subplots()
@@ -198,7 +166,7 @@ if __name__ == "__main__":
     plt.plot(torch.squeeze(test_inputs).data.numpy(), pred_mean, color='b')
     plt.fill_between(torch.squeeze(test_inputs).data.numpy(), pred_mean + 2*pred_sd, 
             pred_mean - 2*pred_sd, color='b', alpha=0.3)
-    filepath = 'full_GP_20.pdf'
+    filepath = results_directory + 'full_GP_200_matern.pdf'
     fig.savefig(filepath)
     plt.close()
 
@@ -216,13 +184,13 @@ if __name__ == "__main__":
     plt.plot(torch.squeeze(train_inputs).data.numpy(), train_outputs.data.numpy(), '+k')
     for i in range(no_samples):
         plt.plot(torch.squeeze(test_inputs).data.numpy(), samples[i,:])
-    filepath = 'full_GP_20_samples.pdf'
+    filepath = results_directory + 'full_GP_200_samples_matern.pdf'
     fig.savefig(filepath)
     plt.close()
 
     # print final NLL and hyperparameters
-    file = open('results_20.txt','w') 
-    file.write('1D GP regression with 20 points \n')
+    file = open(results_directory + 'results_200_matern.txt','w') 
+    file.write('1D GP regression with 200 points \n')
     file.write('noise_sd: {} \n'.format(torch.exp(model.logsigman2/2).item()))
     file.write('function_sd: {} \n'.format(torch.exp(model.logsigmaf2/2).item()))
     file.write('length_scale: {} \n'.format(torch.exp(model.logl2/2).item()))
