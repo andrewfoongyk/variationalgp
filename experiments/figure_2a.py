@@ -17,6 +17,8 @@ fig, ax = plt.subplots()
 plt.errorbar(grid, KL_mean, color='r',yerr=KL_std,capsize=5)
 plt.plot([0,455],[0,0],color='k',linestyle='--')
 plt.ylim([-5,75])
+plt.ylabel('KL (p||q)')
+plt.xlabel('Number of inducing points')
 
 # save plot
 
