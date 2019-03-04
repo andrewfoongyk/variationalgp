@@ -11,7 +11,7 @@ from tqdm import trange
 from copy import deepcopy
 
 class variational_GP(nn.Module):  
-    def __init__(self, Xn, Yn, no_inducing=15, kernel='SE'):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
+    def __init__(self, Xn, Yn, no_inducing=15, kernel='SE', freeze_hyperparam=False, logsigmaf2=None, logl2=None, logsigman2=None):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
         super(variational_GP, self).__init__()
         self.kernel = kernel
 
@@ -22,15 +22,28 @@ class variational_GP(nn.Module):
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
         self.logl2 = nn.Parameter(torch.zeros(self.no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
-        self.jitter_factor = 1e-6
 
-        # initialise inducing points randomly
-        #import pdb; pdb.set_trace()
+        # freeze hyperparameters if required
+        if freeze_hyperparam == True:
+            self.logsigmaf2.requires_grad = not freeze_hyperparam
+            self.logl2.requires_grad = not freeze_hyperparam
+            self.logsigman2.requires_grad = not freeze_hyperparam
+            self.logsigmaf2 = logsigmaf2
+            self.logl2 = logl2
+            self.logsigman2 = logsigman2
+        # 10^-6 jitter used for the 1D dataset
+        #self.jitter_factor = 1e-6
+        # 10^-5 jitter used for the Boston dataset
+        self.jitter_factor = 1e-5
+
+        # initialise inducing points randomly for the Boston dataset
+        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
+
+        # initialise inducing points in a small interval for the toy 1D dataset
         upper = 3
         lower = 2
         input_locations = (lower - upper) * torch.rand(no_inducing,self.Xn.shape[1]) + upper
         self.Xm = nn.Parameter(input_locations.type(torch.FloatTensor),requires_grad=True)
-        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
         
     def get_K(self, input1, input2):
         if self.kernel == 'SE':
@@ -46,7 +59,7 @@ class variational_GP(nn.Module):
             abs_distances = torch.abs(inputs_col - inputs_row)
             length_factors = (1/(torch.exp(self.logl2))).reshape(self.no_inputs,1,1)
             scaled_distances = abs_distances * length_factors
-            K = torch.exp(self.logsigmaf2) * torch.exp(-1.732051*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + 1.732051*scaled_distances), 0))
+            K = torch.exp(self.logsigmaf2) * torch.exp(-torch.Tensor([np.sqrt(3)])*torch.sum(scaled_distances, 0) + torch.sum(torch.log(1 + torch.Tensor([np.sqrt(3)])*scaled_distances), 0))
         else:
             raise Exception('Invalid kernel name')
         return K
