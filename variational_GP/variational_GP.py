@@ -10,6 +10,9 @@ from tqdm import tqdm
 from tqdm import trange
 from copy import deepcopy
 
+sys.path.append('/home/frozenmiwe/7_MGM/Advanced ML/code/experiments')
+from KL_computation import *
+
 class variational_GP(nn.Module):  
     def __init__(self, Xn, Yn, no_inducing=15, kernel='SE', freeze_hyperparam=False, logsigmaf2=None, logl2=None, logsigman2=None):   # the GP takes the training data as arguments, in the form of numpy arrays, with the correct dimensions        
         super(variational_GP, self).__init__()
@@ -25,25 +28,25 @@ class variational_GP(nn.Module):
 
         # freeze hyperparameters if required
         if freeze_hyperparam == True:
-            self.logsigmaf2.requires_grad = not freeze_hyperparam
-            self.logl2.requires_grad = not freeze_hyperparam
-            self.logsigman2.requires_grad = not freeze_hyperparam
             self.logsigmaf2 = logsigmaf2
             self.logl2 = logl2
             self.logsigman2 = logsigman2
+            self.logsigmaf2.requires_grad = not freeze_hyperparam
+            self.logl2.requires_grad = not freeze_hyperparam
+            self.logsigman2.requires_grad = not freeze_hyperparam
         # 10^-6 jitter used for the 1D dataset
         #self.jitter_factor = 1e-6
         # 10^-5 jitter used for the Boston dataset
         self.jitter_factor = 1e-5
 
         # initialise inducing points randomly for the Boston dataset
-        #self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
+        self.Xm = nn.Parameter(torch.Tensor(Xn[random.sample(range(Xn.shape[0]),no_inducing),:]).type(torch.FloatTensor))
 
         # initialise inducing points in a small interval for the toy 1D dataset
-        upper = 3
-        lower = 2
-        input_locations = (lower - upper) * torch.rand(no_inducing,self.Xn.shape[1]) + upper
-        self.Xm = nn.Parameter(input_locations.type(torch.FloatTensor),requires_grad=True)
+        #upper = 3
+        #lower = 2
+        #input_locations = (lower - upper) * torch.rand(no_inducing,self.Xn.shape[1]) + upper
+        #self.Xm = nn.Parameter(input_locations.type(torch.FloatTensor),requires_grad=True)
         
     def get_K(self, input1, input2):
         if self.kernel == 'SE':
@@ -125,6 +128,7 @@ class variational_GP(nn.Module):
         cov = Kxx - LindslashKmx.transpose(0,1) @ LindslashKmx + LslashKmx.transpose(0,1) @ LslashKmx
 
         if noise == True: # add observation noise
+
             cov = cov + torch.exp(self.logsigman2) * torch.eye(no_test)
 
         # calculate the predictive mean by backsolving

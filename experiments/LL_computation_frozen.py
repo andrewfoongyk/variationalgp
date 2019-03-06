@@ -13,32 +13,7 @@ from copy import deepcopy
 sys.path.append('/home/frozenmiwe/7_MGM/Advanced ML/code/full_GP')
 sys.path.append('/home/frozenmiwe/7_MGM/Advanced ML/code/variational_GP')
 from variational_GP import *
-#from variational_GP import *
 from full_GP import *
-
-KL_jitter_factor = 10e-6
-
-def gaussian_KL(mu0, mu1, Sigma0, Sigma1):
-    # calculate the KL divergence between multivariate Gaussians KL(0||1)py
-    no_dims = Sigma0.shape[0]
-
-    L1 = torch.potrf(Sigma1 + KL_jitter_factor*torch.eye(Sigma1.shape[0]), upper=False)
-    L1slashSigma = torch.trtrs(Sigma0 ,L1 ,upper=False)[0]
-    SigmainvSigma = torch.trtrs(L1slashSigma ,L1.transpose(0,1))[0]
-    trace_term = torch.trace(SigmainvSigma)
-
-    mu_diff = mu1 - mu0
-    v = torch.trtrs(mu_diff, L1, upper=False)[0]
-    quadratic_term = v.transpose(0,1) @ v
-
-    L0 = torch.potrf(Sigma0 + KL_jitter_factor*torch.eye(Sigma0.shape[0]), upper=False)
-    logdet_term = 2*torch.sum(torch.log(torch.diag(L1))) - 2*torch.sum(torch.log(torch.diag(L0)))
-
-    KL = 0.5*(trace_term + quadratic_term - no_dims + logdet_term)
-
-    #import pdb; pdb.set_trace()
-
-    return KL
 
 if __name__ == '__main__':
 
@@ -119,26 +94,13 @@ if __name__ == '__main__':
 
     grid = [1,15] + list(range(30,451,30)) + [455]
     no_replicates = 10
-    KL_results = np.zeros([len(grid),no_replicates])
+    LL_results = np.zeros([len(grid),no_replicates])
 
     for grid_index,no_inducing in enumerate(grid):
         for replicate_index in range(no_replicates):
             
             varGP = variational_GP(x_train_normalised.data.numpy(), np.expand_dims(y_train_normalised.data.numpy(),1), no_inducing=no_inducing, freeze_hyperparam=True, logsigmaf2=full_logsigmaf2, logl2=full_logl2, logsigman2=full_logsigman2)
-
-            varGP.optimize_parameters(500, 'Adam', learning_rate=0.01)
-            var_pred_mean, var_pred_covar = varGP.joint_posterior_predictive(x_test_normalised.data.numpy(), noise=True)
-            var_pred_mean = var_pred_mean*train_sd[-1] + train_mean[-1]
-            #import pdb; pdb.set_trace()
-            var_pred_covar = var_pred_covar*(train_sd[-1]**2)
-            #var_pred_var = torch.diag(var_pred_covar)
-
-
-            # Compute KL divergence
-
-            #import pdb; pdb.set_trace()
-
-            KL = gaussian_KL(full_pred_mean, var_pred_mean, full_pred_covar, var_pred_covar)
-            KL_results[grid_index,replicate_index] = KL
-        #import pdb; pdb.set_trace()
-        np.savetxt('KL_results_no_noise.tsv', KL_results, delimiter='\t')
+            varGP.optimize_parameters(500, 'Adam', learning_rate=0.1)
+            var_LL_lower_bound = varGP.Fv()
+            LL_results[grid_index,replicate_index] = var_LL_lower_bound
+        np.savetxt('LL_results_frozen.tsv', LL_results, delimiter='\t')
