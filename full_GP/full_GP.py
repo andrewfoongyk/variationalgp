@@ -19,13 +19,14 @@ class GP(nn.Module):
         self.logsigmaf2 = nn.Parameter(torch.Tensor([0])) # function variance
         self.logl2 = nn.Parameter(torch.zeros(no_inputs)) # horizontal length scales
         self.logsigman2 = nn.Parameter(torch.Tensor([0])) # noise variance
+        self.jitter = 1e-6
 
     def get_LL(self, train_inputs, train_outputs):
         # form the kernel matrix Knn 
         Knn = self.get_K(train_inputs, train_inputs)
 
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]) + self.jitter*torch.eye(Knn.size()[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         alpha = torch.trtrs(Lslashy, torch.transpose(L,0,1))[0]
 
@@ -59,7 +60,7 @@ class GP(nn.Module):
         Knn = self.get_K(train_inputs, train_inputs)
         
         # cholesky decompose
-        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]), upper=False) # lower triangular decomposition
+        L = torch.potrf(Knn + torch.exp(self.logsigman2)*torch.eye(train_inputs.shape[0]) + self.jitter*torch.eye(Knn.size()[0]), upper=False) # lower triangular decomposition
         Lslashy = torch.trtrs(train_outputs, L, upper=False)[0]
         
         # get cross covariance between test and train points, Ktn
@@ -83,7 +84,7 @@ def gaussian_KL(mu0, mu1, Sigma0, Sigma1):
     # calculate the KL divergence between multivariate Gaussians KL(0||1)
     no_dims = Sigma0.shape[0]
 
-    L1 = torch.potrf(Sigma1, upper=False)
+    L1 = torch.potrf(Sigma1 + self.jitter*torch.eye(Sigma.size()[0]), upper=False)
     L1slashSigma = torch.trtrs(Sigma0 ,L1 ,upper=False)[0]
     SigmainvSigma = torch.trtrs(L1slashSigma ,L1.transpose(0,1))[0]
     trace_term = torch.trace(SigmainvSigma)
@@ -92,7 +93,7 @@ def gaussian_KL(mu0, mu1, Sigma0, Sigma1):
     v = torch.trtrs(mu_diff, L1, upper=False)[0]
     quadratic_term = v.transpose(0,1) @ v
 
-    L0 = torch.potrf(Sigma0, upper=False)
+    L0 = torch.potrf(Sigma0 + self.jitter*torch.eye(Sigma0.size()[0]), upper=False)
     logdet_term = 2*torch.sum(torch.log(torch.diag(L1))) - 2*torch.sum(torch.log(torch.diag(L0)))
 
     KL = 0.5*(trace_term + quadratic_term - no_dims + logdet_term)
